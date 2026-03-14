@@ -1334,7 +1334,7 @@ async function fetchAIAnalysis(stockName, price, signal, rsi, fromHigh, tgt1, sl
   document.getElementById('ai-output').textContent = '';
 
   try {
-    const res = await fetch('/api/ai', {
+    const res  = await fetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1349,9 +1349,23 @@ async function fetchAIAnalysis(stockName, price, signal, rsi, fromHigh, tgt1, sl
       })
     });
     const data = await res.json();
+
+    // Handle low balance / API errors gracefully
+    if (data.error) {
+      const isBalance = data.error.toLowerCase().includes('credit') ||
+                        data.error.toLowerCase().includes('balance') ||
+                        data.error.toLowerCase().includes('billing');
+      document.getElementById('aiThinking').classList.remove('active');
+      document.getElementById('ai-output').textContent = isBalance
+        ? `⚠ AI analysis paused — Anthropic API credits exhausted.\n\nAll technical signals above are calculated locally and are fully accurate:\n• Signal: ${signal}\n• RSI: ${parseFloat(rsi).toFixed(1)} ${parseFloat(rsi) < 30 ? '(oversold — strong buy zone)' : parseFloat(rsi) > 70 ? '(overbought — caution)' : '(neutral zone)'}\n• Entry zone, Stop Loss, and Targets are calculated from live price data.\n\nTo re-enable AI analysis: top up at console.anthropic.com → Billing.`
+        : `AI analysis unavailable: ${data.error}`;
+      return;
+    }
+
     const text = data?.text || 'AI analysis unavailable.';
     document.getElementById('aiThinking').classList.remove('active');
     document.getElementById('ai-output').textContent = text;
+
   } catch (e) {
     document.getElementById('aiThinking').classList.remove('active');
     document.getElementById('ai-output').textContent = 'AI analysis could not be loaded. Technical signals above are still valid.';

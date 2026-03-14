@@ -61,7 +61,10 @@ Be direct, specific to Indian market. No fluff.`;
     });
 
     const data = await response.json();
-    if (!response.ok) return res.status(response.status).json({ error: data.error?.message });
+    if (!response.ok) {
+      const errMsg = data?.error?.message || JSON.stringify(data);
+      return res.status(200).json({ error: errMsg }); // return 200 so frontend handles it gracefully
+    }
 
     const text = data?.content?.[0]?.text || '';
     return res.status(200).json({ text });
