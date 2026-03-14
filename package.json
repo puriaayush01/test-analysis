@@ -1,0 +1,8 @@
+{
+  "name": "tradesignal-ai",
+  "version": "1.0.0",
+  "description": "TradeSignal AI — NSE/BSE Stock Analysis",
+  "engines": {
+    "node": "18.x"
+  }
+}
