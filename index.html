@@ -958,17 +958,16 @@ let acSelected = -1;
 let acDebounce = null;
 let acCache    = {};
 
-async function fetchSuggestions(q) {
-  if (acCache[q]) return acCache[q];
+async function fetchSuggestions(query) {
+  if (acCache[query]) return acCache[query];
 
-  const yahooSearch = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=10&newsCount=0&listsCount=0`;
-  const proxies = [
-    `https://corsproxy.io/?${encodeURIComponent(yahooSearch)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooSearch)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yahooSearch)}`,
+  const attempts = [
+    `/api/search?q=${encodeURIComponent(query)}`,
+    `https://corsproxy.io/?${encodeURIComponent(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=10&newsCount=0`)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=10&newsCount=0`)}`,
   ];
 
-  for (const url of proxies) {
+  for (const url of attempts) {
     try {
       const ctrl = new AbortController();
       setTimeout(() => ctrl.abort(), 4000);
@@ -979,26 +978,26 @@ async function fetchSuggestions(q) {
       const data   = JSON.parse(raw);
       const quotes = data?.quotes || [];
       const results = quotes
-        .filter(q => q.exchange === 'NSI' || q.exchange === 'BSE' ||
-                     q.typeDisp === 'Index' ||
-                     (q.symbol && (q.symbol.endsWith('.NS') || q.symbol.endsWith('.BO'))))
+        .filter(r => r.exchange === 'NSI' || r.exchange === 'BSE' ||
+                     r.typeDisp === 'Index' ||
+                     (r.symbol && (r.symbol.endsWith('.NS') || r.symbol.endsWith('.BO'))))
         .slice(0, 8)
-        .map(q => ({
-          s:   (q.symbol||'').replace('.NS','').replace('.BO',''),
-          y:   q.symbol || '',
-          n:   q.longname || q.shortname || q.symbol || '',
-          cat: q.typeDisp === 'Index' ? 'Index' : (q.exchange === 'BSE' ? 'BSE' : 'NSE'),
+        .map(r => ({
+          s:   (r.symbol||'').replace('.NS','').replace('.BO',''),
+          y:   r.symbol || '',
+          n:   r.longname || r.shortname || r.symbol || '',
+          cat: r.typeDisp === 'Index' ? 'Index' : (r.exchange === 'BSE' ? 'BSE' : 'NSE'),
         }));
-      if (results.length) { acCache[q] = results; return results; }
+      if (results.length) { acCache[query] = results; return results; }
     } catch (_) {}
   }
 
   // Fallback to local database
   return SEARCH_INDEX
-    .filter(st => st.search.includes(q.toLowerCase()))
+    .filter(st => st.search.includes(query.toLowerCase()))
     .sort((a, b) =>
-      (a.s.toLowerCase().startsWith(q.toLowerCase()) ? 0 : 1) -
-      (b.s.toLowerCase().startsWith(q.toLowerCase()) ? 0 : 1))
+      (a.s.toLowerCase().startsWith(query.toLowerCase()) ? 0 : 1) -
+      (b.s.toLowerCase().startsWith(query.toLowerCase()) ? 0 : 1))
     .slice(0, 8)
     .map(st => ({ s: st.s, y: st.y, n: st.n, cat: st.cat }));
 }
@@ -1076,46 +1075,35 @@ function closeAC() {
   box.innerHTML = ''; box.style.display = 'none';
 }
 
-// ─── Fetch quote — 3-strategy approach ───────────────────────
-// Strategy 1: Direct Yahoo (works on some networks)
-// Strategy 2: Multiple CORS proxies
-// Strategy 3: Ask Claude AI to provide the data + analysis
+// ─── Fetch quote — Vercel serverless proxy ───────────────────
 async function fetchQuote(symbol) {
   const enc = encodeURIComponent;
-  const urls = [
-    // Direct Yahoo with no-cors hint
-    `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`,
-    // Proxies
-    `https://corsproxy.io/?${enc(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`)}`,
-    `https://api.allorigins.win/raw?url=${enc(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`)}`,
-    `https://thingproxy.freeboard.io/fetch/https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`,
-    `https://api.codetabs.com/v1/proxy?quest=${enc(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`)}`,
-    `https://cors-anywhere.herokuapp.com/https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`,
+
+  // On Vercel: /api/quote runs server-side, fetches Yahoo with no CORS issues
+  // On localhost: falls through to CORS proxies
+  const attempts = [
+    { url: `/api/quote?symbol=${enc(symbol)}`,  vercel: true },
+    { url: `https://corsproxy.io/?${enc(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`)}`, vercel: false },
+    { url: `https://api.allorigins.win/raw?url=${enc(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=3mo`)}`, vercel: false },
   ];
 
-  for (const url of urls) {
+  for (const attempt of attempts) {
     try {
       const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 6000);
-      const res = await fetch(url, {
-        signal: ctrl.signal,
-        headers: { 'Accept': 'application/json', 'Origin': 'https://finance.yahoo.com' }
-      });
+      const tid  = setTimeout(() => ctrl.abort(), 8000);
+      const res  = await fetch(attempt.url, { signal: ctrl.signal });
       clearTimeout(tid);
       if (!res.ok) continue;
+
       let raw = await res.text();
-      // allorigins wraps in {contents: "..."}
-      if (raw.trim().startsWith('{"contents"')) {
-        raw = JSON.parse(raw).contents;
-      }
-      const data = JSON.parse(raw);
+      if (raw.includes('"contents"')) raw = JSON.parse(raw).contents;
+      const data   = JSON.parse(raw);
       const result = data?.chart?.result?.[0];
       if (result?.timestamp?.length > 5) return { result, source: 'live' };
     } catch (_) { /* try next */ }
   }
 
-  // All proxies failed — use Claude API to get real stock data
+  // All failed — fall back to AI
   return { result: null, source: 'ai', symbol };
 }
 
@@ -1128,18 +1116,19 @@ async function fetchViaClaudeAI(symbol, displayName) {
 Example format (replace with real values):
 {"price":41.62,"prevClose":42.10,"high52":74.30,"low52":38.17,"rsi":38.5,"signal":"BUY","confidence":72,"closes30d":[45,44,43,42,41,40,39,38,39,40,41,42,41,40,39,38,37,38,39,40,41,42,41,40,41,42,41,40,41,41.62]}`;
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetch('/api/ai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 800,
-      messages: [{ role: 'user', content: prompt }]
+      type: 'stockdata',
+      symbol,
+      displayName,
     })
   });
 
   const data = await res.json();
-  const text = (data?.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+  if (data.error) throw new Error(data.error);
+  const text  = (data?.text || '').replace(/```json|```/g, '').trim();
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('AI returned unexpected format');
 
@@ -1339,40 +1328,28 @@ function renderIndicators(signals) {
   document.getElementById('indicatorList').innerHTML = html;
 }
 
-// ─── AI Analysis via Claude API ───
+// ─── AI Analysis via Vercel API route ───
 async function fetchAIAnalysis(stockName, price, signal, rsi, fromHigh, tgt1, slPrice) {
   document.getElementById('aiThinking').classList.add('active');
   document.getElementById('ai-output').textContent = '';
 
-  const prompt = `You are a concise Indian stock market analyst. Analyse ${stockName} trading at ₹${price.toFixed(2)}.
-
-Technical snapshot:
-- Signal: ${signal}
-- RSI: ${rsi.toFixed(1)}
-- From 52-week high: ${fromHigh.toFixed(1)}%
-- 1-2 month target: ₹${tgt1}
-- Stop loss: ₹${slPrice}
-
-Give a sharp 4-5 line analysis covering:
-1. Why the current signal makes sense right now
-2. The key catalyst or risk to watch
-3. What would make you change this signal
-4. One-line verdict
-
-Be direct, specific to Indian market context. No fluff.`;
-
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }]
+        type: 'analysis',
+        displayName: stockName,
+        price: parseFloat(price).toFixed(2),
+        signal,
+        rsi: parseFloat(rsi).toFixed(1),
+        fromHigh: parseFloat(fromHigh).toFixed(1),
+        tgt1,
+        slPrice,
       })
     });
     const data = await res.json();
-    const text = data?.content?.[0]?.text || 'AI analysis unavailable.';
+    const text = data?.text || 'AI analysis unavailable.';
     document.getElementById('aiThinking').classList.remove('active');
     document.getElementById('ai-output').textContent = text;
   } catch (e) {
